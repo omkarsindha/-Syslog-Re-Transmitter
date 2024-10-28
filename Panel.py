@@ -158,6 +158,7 @@ class Panel(wx.Panel):
             else:
                 self.destination_ports[port].append(packet)
         self.progress_bar.SetValue(100)
+        cap.close()
         sorted_destination_ips = dict(sorted(self.destination_ips.items(), key=lambda item: len(item[1]), reverse=True))
         sorted_destination_ports = dict(sorted(self.destination_ports.items(), key=lambda item: len(item[1]), reverse=True))
 
@@ -265,13 +266,14 @@ class Panel(wx.Panel):
 
     def OnTimer(self, event):
         """Called periodically while the flooder threads are running."""
-        self.animation_counter += 1
-        self.set_status_text(f"Forwarding Packets{'.' * (self.animation_counter % 10)}")
-
+        count = self.re_transmit_thread.sent_count
+        total = '?' if self.re_transmit_thread.total_packets is 0 else str(self.re_transmit_thread.total_packets)
+        # self.set_status_text(f"Forwarding Packets{'.' * (self.animation_counter % 10)}")
+        self.set_status_text(f"Forwarding Packet {count} out of {total}")
         if self.re_transmit_thread.end_event.is_set():
             if self.timer.IsRunning():
                 self.timer.Stop()
-            count = self.re_transmit_thread.count
+            count = self.re_transmit_thread.sent_count
             self.set_status_text(f"Forwarded {count} packets")
             self.re_transmit_thread = None
             self.forward.Enable()
