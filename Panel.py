@@ -1,23 +1,25 @@
 import socket
 import time
+from tkinter.constants import VERTICAL
+
 import utils
 import wx
 import pcaplib
 import Widgets
-
+import Threads
 
 class Panel(wx.Panel):
     def __init__(self, parent, wxconfig):
-
         wx.Panel.__init__(self, parent)
         self.wxconfig = wxconfig
         self.parent = parent
         self.config = wx.Config()
-        self.previewed_file = ""       # Stores the current previewed file's path so if user changes file it persists the data
-        self.previewed_protocol = ""   # Stores the current previewed file's protocol
-        self.destination_ips = {}
-        self.destination_ports = {}
+        self.destination_ips:dict[str,list] = {}
+        self.destination_ports:dict[str,list] = {}
+        self.re_transmit_thread: Threads.ReTransmitPacketsThread = None
+
         self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.OnTimer, self.timer)
         self.animation_counter: int = 0
 
         self.main_vbox = wx.BoxSizer(wx.VERTICAL)
@@ -25,61 +27,90 @@ class Panel(wx.Panel):
         main_box.SetFont(wx.Font(wx.FontInfo(12).Bold()))
         main_box_sizer = wx.StaticBoxSizer(main_box)
 
-        ip_label = wx.StaticText(self, label="Destination IP:")
-        self.ip_cmb_bx = wx.ComboBox(self, size=(180, -1), style=wx.CB_READONLY)
-        self.ip_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
-        self.ip_cmb_bx.Disable()
-
-        port_label = wx.StaticText(self, label="Destination Port:")
-        self.port_cmb_bx = wx.ComboBox(self, size=(150, -1), style=wx.CB_READONLY)
-        self.port_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
-        self.port_cmb_bx.Disable()
-
         file_box_sizer = wx.BoxSizer()
         self.file_label = wx.StaticText(self, label="Source File:")
-        self.file_name = wx.TextCtrl(self, style=wx.TE_READONLY, size=(400, -1),
-                                     value=self.config.Read('/path', defaultVal=""))
+        self.file_name = wx.TextCtrl(self, style=wx.TE_READONLY, size=(400, -1))
         self.choose_file = wx.Button(self, label="Choose File")
         self.choose_file.Bind(wx.EVT_BUTTON, self.on_choose)
-
-        choices = ['UDP', 'TCP']
-        self.protocol_cmb_bx = wx.ComboBox(self, choices=choices, style=wx.CB_READONLY)
-        self.protocol_cmb_bx.SetSelection(0)
 
         file_box_sizer.Add(self.file_label, 0, wx.EXPAND | wx.ALL, 5)
         file_box_sizer.Add(self.file_name, 0, wx.EXPAND | wx.ALL, 5)
         file_box_sizer.Add(self.choose_file, 0, wx.EXPAND | wx.ALL, 5)
-        file_box_sizer.Add(self.protocol_cmb_bx, 0, wx.EXPAND | wx.ALL, 5)
 
-        self.preview = wx.Button(self, label="Preview")
-        self.preview.Bind(wx.EVT_BUTTON, self.on_preview)
+        self.progress_bar = Widgets.ProgressBarWidget(self)
 
+        trg_ip_label = wx.StaticText(self, label="Target IP:")
+        self.ip_cmb_bx = wx.ComboBox(self, size=(180, -1), style=wx.CB_READONLY)
+        self.ip_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
 
+        trg_port_label = wx.StaticText(self, label="Target Port:")
+        self.port_cmb_bx = wx.ComboBox(self, size=(150, -1), style=wx.CB_READONLY)
+        self.port_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
 
+        self.protocol_cmb_bx = wx.ComboBox(self, choices=['UDP', 'TCP'], style=wx.CB_READONLY)
+        self.protocol_cmb_bx.SetSelection(0)
+        self.protocol_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
+
+        self.settings_box_sizer = wx.BoxSizer()
+        self.settings_box_sizer.Add(trg_ip_label, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.settings_box_sizer.Add(self.ip_cmb_bx, 0, wx.EXPAND | wx.RIGHT, 15)
+        self.settings_box_sizer.Add(trg_port_label, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.settings_box_sizer.Add(self.port_cmb_bx, 0, wx.EXPAND | wx.RIGHT, 15)
+        self.settings_box_sizer.Add(self.protocol_cmb_bx, 0, wx.EXPAND | wx.LEFT, 5)
+        for item in self.settings_box_sizer.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
+
+        dst_ip_label = wx.StaticText(self, label="Destination IP:")
+        self.dst_ip_input = wx.TextCtrl(self, value=self.parent.wxconfig.Read('/forwardIP', defaultVal=""),
+                                        size=(100, -1))
+
+        dst_port_label = wx.StaticText(self, label="Destination Port:")
+        self.dst_port_input = wx.TextCtrl(self, value=self.parent.wxconfig.Read('/forwardPort', defaultVal=""),
+                                      size=(50, -1))
+        delay_label = wx.StaticText(self, label="Packets/Sec:")
+        self.delay_input = wx.TextCtrl(self, value=self.parent.wxconfig.Read('/forwardDelay', defaultVal=""),
+                                          size=(40, -1))
+        self.frwd_box1 = wx.BoxSizer()
+        self.frwd_box1.Add(dst_ip_label, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.frwd_box1.Add(self.dst_ip_input, 0, wx.EXPAND | wx.RIGHT, 15)
+        self.frwd_box1.Add(dst_port_label, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.frwd_box1.Add(self.dst_port_input, 0, wx.EXPAND | wx.RIGHT, 15)
+        self.frwd_box1.Add(delay_label, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.frwd_box1.Add(self.delay_input, 0, wx.EXPAND | wx.RIGHT, 15)
+        for item in self.frwd_box1.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
+
+        source_label = wx.StaticText(self, label="Include Actual Source?")
+        self.source_ck_bx = wx.CheckBox(self)
+        index_label = wx.StaticText(self, label="Start Index:")
+        self.index_input = wx.TextCtrl(self, value="1", size=(40, -1))
         self.forward = wx.Button(self, label="Forward")
-        # self.forward.Bind(wx.EVT_BUTTON, self.on_start)
-        self.forward.Disable()
+        self.forward.Bind(wx.EVT_BUTTON, self.on_forward)
+        self.stop = wx.Button(self, label="Stop")
+        self.stop.Bind(wx.EVT_BUTTON, self.on_stop)
+        self.frwd_box2 = wx.BoxSizer()
+        self.frwd_box2.Add(source_label, 0, wx.EXPAND | wx.TOP | wx.RIGHT, 5)
+        self.frwd_box2.Add(self.source_ck_bx, 0, wx.EXPAND | wx.RIGHT, 10)
+        self.frwd_box2.Add(index_label, 0, wx.EXPAND | wx.TOP | wx.RIGHT, 5)
+        self.frwd_box2.Add(self.index_input, 0, wx.EXPAND | wx.RIGHT, 30)
+        self.frwd_box2.Add(self.forward, 0, wx.EXPAND | wx.RIGHT, 10)
+        self.frwd_box2.Add(self.stop, 0, wx.EXPAND | wx.RIGHT, 5)
+        for item in self.frwd_box2.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
 
-        grid = wx.GridBagSizer(4, 4)
-
-        grid.Add(file_box_sizer, pos=(0, 0), span=(1,7), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        grid.Add((0, 10), pos=(0, 7), flag=wx.LEFT | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=20)
-        grid.Add(self.preview, pos=(0, 8), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        grid.Add(ip_label, pos=(1, 0), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        grid.Add(self.ip_cmb_bx, pos=(1, 1), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        grid.Add((10, 10), pos=(1, 2))
-        grid.Add(port_label, pos=(1, 3), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        grid.Add(self.port_cmb_bx, pos=(1, 4), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        grid.Add(self.forward, pos=(1, 8), flag=wx.TOP | wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL,
-                 border=10)
-        main_box_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 5)
+        vbox = wx.BoxSizer(wx.VERTICAL)
+        vbox.Add(file_box_sizer, 0, wx.ALIGN_CENTER | wx.TOP, 5)
+        vbox.Add(self.progress_bar, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
+        vbox.Add(self.settings_box_sizer, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+        vbox.Add(self.frwd_box1, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+        vbox.Add(self.frwd_box2, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+        main_box_sizer.Add(vbox, 0, wx.ALIGN_CENTER | wx.ALL, 5)
 
         # List Control
         self.list_ctrl = wx.ListCtrl(self, style=wx.LC_REPORT)
@@ -94,52 +125,39 @@ class Panel(wx.Panel):
 
         self.SetSizer(self.main_vbox)
 
-    def on_preview(self, event):
+
+    def on_file_change(self, event=None):
+        """ Event method for preview button.
+        Loads the file for 2 seconds to get a feel of the file."""
         path = self.file_name.GetValue()
-        protocol = self.protocol_cmb_bx.GetStringSelection()
-
-        self.previewed_file = path
-        self.previewed_protocol = protocol
-
-        if path =="":
-            self.error_prompt("File not selected")
-            self.set_status_text("File not selected :(")
-            return
-
         self.destination_ips = {}
         self.destination_ports = {}
         cap = pcaplib.CapFile(filename=path)
 
         start_time = time.time()
+        self.progress_bar.Reset()
         for packet in cap:
-            if time.time() - start_time > 2:
-                break
+            elapsed = time.time() - start_time
+            progress = min(100, int((elapsed / 3) * 100))
+            self.progress_bar.SetValue(progress)
 
+            if elapsed > 3:
+                break
             if not isinstance(packet, pcaplib.Packet):
                 continue
-
-            if protocol == 'UDP':
-                if not packet.udp_len:
-                    continue
-            elif protocol == 'TCP':
-                if packet.udp_len:
-                    continue
-
             if not packet.dst:  # Sometimes the destination is none
                 continue
-
             ip = socket.inet_ntoa(packet.dst)
             if ip not in self.destination_ips:
                 self.destination_ips[ip] = [packet]
             else:
                 self.destination_ips[ip].append(packet)
-
             port = packet.dst_port
             if port not in self.destination_ports:
                 self.destination_ports[port] = [packet]
             else:
                 self.destination_ports[port].append(packet)
-
+        self.progress_bar.SetValue(100)
         sorted_destination_ips = dict(sorted(self.destination_ips.items(), key=lambda item: len(item[1]), reverse=True))
         sorted_destination_ports = dict(sorted(self.destination_ports.items(), key=lambda item: len(item[1]), reverse=True))
 
@@ -147,49 +165,63 @@ class Panel(wx.Panel):
         self.ip_cmb_bx.SetSelection(0)
         self.port_cmb_bx.Set([f"{key} ({len(sorted_destination_ports[key])} Packets)" for key in sorted_destination_ports])
         self.port_cmb_bx.SetSelection(0)
-        self.forward.Enable()
-        self.ip_cmb_bx.Enable()
-        self.port_cmb_bx.Enable()
         self.set_status_text("The list and packet numbers are just for getting a feel of the file, they might not include all the packets!!!")
         self.update_list()
 
     def update_list(self, event=None):
-        """Updates the list according to the current destination Port and IP"""
+        """Updates the list according to the selected destination Port and IP. Does not feed the list more than 210"""
         self.list_ctrl.DeleteAllItems()
-
-        if self.destination_ips or self.destination_ports:   # Check if there were any scans or not
+        if self.destination_ips and self.destination_ports:   # Check if there were any scans
             ip_key = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
             port_key = self.port_cmb_bx.GetStringSelection().split(" ")[0]
             packets = self.destination_ips[ip_key]
+            protocol = self.protocol_cmb_bx.GetStringSelection()
             for packet in packets:
+                if (protocol == 'UDP' and not packet.udp_len) or (protocol == 'TCP' and packet.udp_len):
+                    continue
                 if str(packet.dst_port) == port_key:
                     self.add_to_list(packet)
-                if self.list_ctrl.GetItemCount() > 200:
+                if self.list_ctrl.GetItemCount() > 210:
                     break
 
     def on_forward(self, event):
-        path = self.file_name.GetValue()
-        if path == "":
-            self.error_prompt("File not selected")
-            self.set_status_text("File not selected :(")
+        dst_ip = self.dst_ip_input.GetValue()
+        dst_port = self.dst_port_input.GetValue()
+        delay = self.delay_input.GetValue() # Packets per second
+        index = self.index_input.GetValue()
+        add_source = self.source_ck_bx.IsChecked()
+        if not utils.is_valid_ip(dst_ip):
+            self.error_prompt("Destination IP not valid!")
+            return
+        if not utils.is_valid_port(dst_port):
+            self.error_prompt("Destination IP not valid!")
+            return
+        if not utils.is_positive_number(delay):
+            self.error_prompt("Packets per second should be an integer greater than zero!")
+            return
+        if not utils.is_positive_number(index):
+            self.error_prompt("Index should be an integer greater than zero!")
             return
 
-        cap = pcaplib.CapFile(filename=path)
-        for packet in cap:
-            if not isinstance(packet, pcaplib.Packet):
-                continue
+        self.parent.wxconfig.Write("/forwardIP", dst_ip)
+        self.parent.wxconfig.Write("/forwardPort", dst_port)
+        self.parent.wxconfig.Write("/forwardDelay", delay)
+        self.parent.wxconfig.Write("/forwardIndex", delay)
 
-            ip = socket.inet_ntoa(packet.dst)
-            if ip not in self.destination_ips:
-                self.destination_ips[ip] = [packet]
-            else:
-                self.destination_ips[ip].append(packet)
+        trg_ip = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
+        trg_port = int(self.port_cmb_bx.GetStringSelection().split(" ")[0])
+        path = self.file_name.GetValue()
+        protocol = self.protocol_cmb_bx.GetStringSelection()
+        print(index)
+        self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip,
+                                                                  int(dst_port), add_source, int(index), int(delay))
+        self.timer.Start(200)
+        self.stop.Enable()
+        self.forward.Disable()
 
-            port = packet.dst_port
-            if port not in self.destination_ports:
-                self.destination_ports[port] = [packet]
-            else:
-                self.destination_ports[port].append(packet)
+    def on_stop(self, event):
+        if self.re_transmit_thread is not None:
+            self.re_transmit_thread.end_event.set()
 
     def add_to_list(self, packet):
         src = socket.inet_ntoa(packet.src)
@@ -208,23 +240,47 @@ class Panel(wx.Panel):
        if dialog.ShowModal() == wx.ID_OK:
            self.file_name.Clear()
            self.file_name.SetValue(dialog.GetPath())
-           self.config.Write("/path", dialog.GetPath())
-       dialog.Destroy()
+           self.config.Write("/capture_path", dialog.GetPath())
+           self.on_file_change()
+           
+           for item in self.settings_box_sizer.GetChildren():
+               widget = item.GetWindow()
+               if widget:
+                   widget.Enable()
+           for item in self.frwd_box1.GetChildren():
+               widget = item.GetWindow()
+               if widget:
+                   widget.Enable()
+           for item in self.frwd_box2.GetChildren():
+               widget = item.GetWindow()
+               if widget:
+                   widget.Enable()
+           self.stop.Disable()
 
+       dialog.Destroy()
 
 
     def set_status_text(self, text):
         self.parent.SetStatusText(text)
 
-    # def OnTimer(self, event):
-    #     """Called periodically while the flooder threads are running."""
-    #     self.animation_counter += 1
-    #     self.parent.SetStatusText(f"Test in progress{'.' * (self.animation_counter % 10)}")
+    def OnTimer(self, event):
+        """Called periodically while the flooder threads are running."""
+        self.animation_counter += 1
+        self.set_status_text(f"Forwarding Packets{'.' * (self.animation_counter % 10)}")
+
+        if self.re_transmit_thread.end_event.is_set():
+            if self.timer.IsRunning():
+                self.timer.Stop()
+            count = self.re_transmit_thread.count
+            self.set_status_text(f"Forwarded {count} packets")
+            self.re_transmit_thread = None
+            self.forward.Enable()
 
     def error_prompt(self, message):
         dlg = wx.MessageDialog(self, message, "Error", wx.OK | wx.ICON_ERROR)
         dlg.ShowModal()
         dlg.Destroy()
+# End class Panel(wx.Panel)
 
 
 if __name__ == '__main__':

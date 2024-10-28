@@ -1,6 +1,5 @@
 import os
 import sys
-
 import wx
 import wx.adv
 from Panel import Panel
@@ -13,7 +12,7 @@ class MainFrame(wx.Frame):
         self.Center()
         self.SetMinSize((400, 400))
 
-        self.wxconfig = wx.Config("SyslogInterpretor")
+        self.wxconfig = wx.Config("SyslogInterceptor")
         self.panel = Panel(self, wxconfig=self.wxconfig)
 
         menubar = wx.MenuBar()
@@ -40,12 +39,12 @@ class MainFrame(wx.Frame):
         info.SetWebSite("www.evertz.com", "Evertz")
         info.AddDeveloper("Omkarsinh Sindha and Cengiz Beytaz")
         wx.adv.AboutBox(info)
-
+# End class MainFrame(wx.Frame)
 
 
 def Main():
     app = wx.App()
-    frame = MainFrame(None, title="Syslog Interceptor", size=(850, 500))
+    frame = MainFrame(None, title="Syslog Interceptor", size=(850, 700))
     frame.Show()
     app.MainLoop()
 
