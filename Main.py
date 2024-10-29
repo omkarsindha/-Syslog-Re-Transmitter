@@ -12,7 +12,7 @@ class MainFrame(wx.Frame):
         self.Center()
         self.SetMinSize((400, 400))
 
-        self.wxconfig = wx.Config("SyslogInterceptor")
+        self.wxconfig = wx.Config("PacketPlayer")
         self.panel = Panel(self, wxconfig=self.wxconfig)
 
         menubar = wx.MenuBar()
@@ -30,7 +30,7 @@ class MainFrame(wx.Frame):
 
     def on_about(self, event):
         info = wx.adv.AboutDialogInfo()
-        info.SetName('Syslog Interceptor')
+        info.SetName('Packet Player')
         info.SetDescription(
             "Python version %s.%s.%s (%s %s)\n" % tuple(sys.version_info) +
             "Powered by wxPython %s\n" % (wx.version()) +
@@ -44,7 +44,7 @@ class MainFrame(wx.Frame):
 
 def Main():
     app = wx.App()
-    frame = MainFrame(None, title="Syslog Interceptor", size=(850, 700))
+    frame = MainFrame(None, title="Packet Player", size=(850, 700))
     frame.Show()
     app.MainLoop()
 

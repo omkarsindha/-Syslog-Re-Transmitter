@@ -84,12 +84,14 @@ class Panel(wx.Panel):
             if widget:
                 widget.Disable()
 
-        source_label = wx.StaticText(self, label="Include Actual Source?")
+        source_label = wx.StaticText(self, label="Syslog Traffic Controller Tagging")
         self.source_ck_bx = wx.CheckBox(self)
         index_label = wx.StaticText(self, label="Start Index:")
-        self.index_input = wx.TextCtrl(self, value="1", size=(40, -1))
-        self.forward = wx.Button(self, label="Forward")
+        self.index_input = wx.TextCtrl(self, value="1", size=(60, -1))
+        self.forward = wx.Button(self, label="Play Out")
         self.forward.Bind(wx.EVT_BUTTON, self.on_forward)
+        self.pause = wx.Button(self, label="Pause")
+        self.pause.Bind(wx.EVT_BUTTON, self.on_pause)
         self.stop = wx.Button(self, label="Stop")
         self.stop.Bind(wx.EVT_BUTTON, self.on_stop)
         self.frwd_box2 = wx.BoxSizer()
@@ -98,6 +100,7 @@ class Panel(wx.Panel):
         self.frwd_box2.Add(index_label, 0, wx.EXPAND | wx.TOP | wx.RIGHT, 5)
         self.frwd_box2.Add(self.index_input, 0, wx.EXPAND | wx.RIGHT, 30)
         self.frwd_box2.Add(self.forward, 0, wx.EXPAND | wx.RIGHT, 10)
+        self.frwd_box2.Add(self.pause, 0, wx.EXPAND | wx.RIGHT, 10)
         self.frwd_box2.Add(self.stop, 0, wx.EXPAND | wx.RIGHT, 5)
         for item in self.frwd_box2.GetChildren():
             widget = item.GetWindow()
@@ -186,6 +189,13 @@ class Panel(wx.Panel):
                     break
 
     def on_forward(self, event):
+        if self.re_transmit_thread:
+            self.re_transmit_thread.playing_event.set()
+            self.forward.Disable()
+            self.pause.Enable()
+            self.forward.SetLabel("Play Out")
+            return
+
         dst_ip = self.dst_ip_input.GetValue()
         dst_port = self.dst_port_input.GetValue()
         delay = self.delay_input.GetValue() # Packets per second
@@ -203,26 +213,34 @@ class Panel(wx.Panel):
         if not utils.is_positive_number(index):
             self.error_prompt("Index should be an integer greater than zero!")
             return
-
         self.parent.wxconfig.Write("/forwardIP", dst_ip)
         self.parent.wxconfig.Write("/forwardPort", dst_port)
         self.parent.wxconfig.Write("/forwardDelay", delay)
         self.parent.wxconfig.Write("/forwardIndex", delay)
-
         trg_ip = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
         trg_port = int(self.port_cmb_bx.GetStringSelection().split(" ")[0])
         path = self.file_name.GetValue()
         protocol = self.protocol_cmb_bx.GetStringSelection()
-        print(index)
         self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip,
                                                                   int(dst_port), add_source, int(index), int(delay))
         self.timer.Start(200)
+        self.pause.Enable()
         self.stop.Enable()
         self.forward.Disable()
+
+    def on_pause(self, event):
+        self.forward.Enable()
+        if self.re_transmit_thread:
+            self.re_transmit_thread.playing_event.clear()
+            self.pause.Disable()
+            self.forward.SetLabel("Resume")
 
     def on_stop(self, event):
         if self.re_transmit_thread is not None:
             self.re_transmit_thread.end_event.set()
+            self.forward.SetLabel("Play Out")
+            self.pause.Disable()
+            self.stop.Disable()
 
     def add_to_list(self, packet):
         src = socket.inet_ntoa(packet.src)
@@ -256,6 +274,7 @@ class Panel(wx.Panel):
                widget = item.GetWindow()
                if widget:
                    widget.Enable()
+           self.pause.Disable()
            self.stop.Disable()
 
        dialog.Destroy()
@@ -267,13 +286,13 @@ class Panel(wx.Panel):
     def OnTimer(self, event):
         """Called periodically while the flooder threads are running."""
         count = self.re_transmit_thread.sent_count
-        total = '?' if self.re_transmit_thread.total_packets is 0 else str(self.re_transmit_thread.total_packets)
+        total = '?' if self.re_transmit_thread.total_packets == 0 else str(self.re_transmit_thread.total_packets)
         # self.set_status_text(f"Forwarding Packets{'.' * (self.animation_counter % 10)}")
         self.set_status_text(f"Forwarding Packet {count} out of {total}")
         if self.re_transmit_thread.end_event.is_set():
             if self.timer.IsRunning():
                 self.timer.Stop()
-            count = self.re_transmit_thread.sent_count
+            count = self.re_transmit_thread.sent_count - self.re_transmit_thread.index
             self.set_status_text(f"Forwarded {count} packets")
             self.re_transmit_thread = None
             self.forward.Enable()

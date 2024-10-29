@@ -5,7 +5,7 @@ import pcaplib
 
 
 class ReTransmitPacketsThread(threading.Thread):
-    def __init__(self, file, trg_ip, trg_port, protocol, ip, port, add_source, index, delay):
+    def __init__(self, file, trg_ip, trg_port, protocol, ip, port, add_source, index, rate):
         """Sends packets to new ip and port"""
         super().__init__()
         self.file: str = file
@@ -16,19 +16,27 @@ class ReTransmitPacketsThread(threading.Thread):
         self.port = port    # New Port to send the packet
         self.add_source = add_source
         self.index = index
-        self.delay = 1 / delay
-        self.sent_count = 0    # Packet sent count
+        self.sent_count = self.index-1    # Packet sent count
         self.total_packets = 0         # We do not know total packets
-        self.packet_count_thread = PacketCountThread(file, trg_ip, trg_port, protocol, index)
+        self.packet_count_thread = PacketCountThread(file, trg_ip, trg_port, protocol)
         self.end_event = threading.Event()
+        self.playing_event = threading.Event()
+        self.playing_event.set()
+
+        self.bursts_per_second = 4
+        self.rate = rate
+
         self.start()
 
     def run(self):
         """This is the method sends packets"""
         index_counter = 1    # self.index is 1 based index
+        since_last_delay = 0
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sock:
+            start_time = time.perf_counter()
             cap = pcaplib.CapFile(filename=self.file)
             for packet in cap:
+                self.playing_event.wait()
                 if not isinstance(packet, pcaplib.Packet):
                     continue
                 if self.end_event.is_set():
@@ -58,8 +66,16 @@ class ReTransmitPacketsThread(threading.Thread):
                 try:
                     sock.sendto(payload, (self.ip, self.port))
                     self.sent_count += 1
-                    print("Forwarded the Packet...")
-                    time.sleep(self.delay)
+                    since_last_delay +=1
+                    if since_last_delay > (self.rate/self.bursts_per_second):
+                        elapsed = time.perf_counter() - start_time
+                        sleep_time = (1/self.bursts_per_second) - elapsed
+                        #print(f"Sleep time is {sleep_time}")
+                        if sleep_time >= 0:
+                            time.sleep(sleep_time)
+                        since_last_delay = 0
+                        start_time = time.perf_counter()
+
                 except Exception as e:
                     print(f"Error sending message: {e}")
 
@@ -73,13 +89,12 @@ class ReTransmitPacketsThread(threading.Thread):
 
 
 class PacketCountThread(threading.Thread):
-    def __init__(self, file, trg_ip, trg_port, protocol, index):
+    def __init__(self, file, trg_ip, trg_port, protocol):
         super().__init__()
         self.file: str = file
         self.trg_ip: str = trg_ip          # Destination IP on packet
         self.trg_port: str = trg_port      # Destination Port on packet
         self.protocol = protocol
-        self.index = index
         self.total_packets = 0    # Packet count
         self.end_event = threading.Event()
         self.start()
@@ -87,7 +102,6 @@ class PacketCountThread(threading.Thread):
     def run(self):
         """This is the method scans total packets"""
         cap = pcaplib.CapFile(filename=self.file)
-        index_counter = 1    # self.index is 1 based index
         for packet in cap:
             if not isinstance(packet, pcaplib.Packet):
                 continue
@@ -106,11 +120,7 @@ class PacketCountThread(threading.Thread):
             if (self.trg_ip != pkt_trg_ip) or (self.trg_port != pkt_trg_port):
                 continue
 
-            if index_counter < self.index:
-                index_counter += 1
-                continue
-
             self.total_packets += 1
         cap.close()
         self.end_event.set()
-# end class ReTransmitPacketsThread(threading.Thread)
+# end class PacketCountThread(threading.Thread):
