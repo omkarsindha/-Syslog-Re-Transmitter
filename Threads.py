@@ -1,3 +1,4 @@
+import random
 import threading
 import time
 import socket
@@ -5,7 +6,7 @@ import pcaplib
 
 
 class ReTransmitPacketsThread(threading.Thread):
-    def __init__(self, file, trg_ip, trg_port, protocol, ip, port, add_source, index, rate):
+    def __init__(self, file, trg_ip, trg_port, protocol, ip, port, add_source, index, rate, loss):
         """Sends packets to new ip and port"""
         super().__init__()
         self.file: str = file
@@ -16,6 +17,7 @@ class ReTransmitPacketsThread(threading.Thread):
         self.port = port    # New Port to send the packet
         self.add_source = add_source
         self.index = index
+        self.loss = loss
         self.sent_count = self.index-1    # Packet sent count
         self.total_packets = 0         # We do not know total packets
         self.packet_count_thread = PacketCountThread(file, trg_ip, trg_port, protocol)
@@ -64,9 +66,15 @@ class ReTransmitPacketsThread(threading.Thread):
                 else:
                     payload = packet.get_payload()
                 try:
-                    sock.sendto(payload, (self.ip, self.port))
+                    rand_num = random.randint(1,100)
+                    if rand_num > self.loss:
+                        sock.sendto(payload, (self.ip, self.port))
+                        print("Packet sent")
+                    else:
+                        print("Packet dropped")
                     self.sent_count += 1
                     since_last_delay +=1
+
                     if since_last_delay > (self.rate/self.bursts_per_second):
                         elapsed = time.perf_counter() - start_time
                         sleep_time = (1/self.bursts_per_second) - elapsed

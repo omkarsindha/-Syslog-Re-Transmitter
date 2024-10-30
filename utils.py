@@ -30,3 +30,12 @@ def is_positive_number(num):
     except ValueError as e:
         print(f"{num} is not a number: {e}")
         return False
+
+def is_percentage(num):
+    """Returns true is given variable is 0-100"""
+    try:
+        num = int(num)
+        return 100 >= num >= 0
+    except ValueError as e:
+        print(f"{num} is not a number: {e}")
+        return False

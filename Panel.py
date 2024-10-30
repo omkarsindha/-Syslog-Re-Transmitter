@@ -1,7 +1,6 @@
+import random
 import socket
 import time
-from tkinter.constants import VERTICAL
-
 import utils
 import wx
 import pcaplib
@@ -13,7 +12,6 @@ class Panel(wx.Panel):
         wx.Panel.__init__(self, parent)
         self.wxconfig = wxconfig
         self.parent = parent
-        self.config = wx.Config()
         self.destination_ips:dict[str,list] = {}
         self.destination_ports:dict[str,list] = {}
         self.re_transmit_thread: Threads.ReTransmitPacketsThread = None
@@ -63,22 +61,27 @@ class Panel(wx.Panel):
                 widget.Disable()
 
         dst_ip_label = wx.StaticText(self, label="Destination IP:")
-        self.dst_ip_input = wx.TextCtrl(self, value=self.parent.wxconfig.Read('/forwardIP', defaultVal=""),
+        self.dst_ip_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardIP', defaultVal=""),
                                         size=(100, -1))
 
         dst_port_label = wx.StaticText(self, label="Destination Port:")
-        self.dst_port_input = wx.TextCtrl(self, value=self.parent.wxconfig.Read('/forwardPort', defaultVal=""),
+        self.dst_port_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardPort', defaultVal=""),
                                       size=(50, -1))
-        delay_label = wx.StaticText(self, label="Packets/Sec:")
-        self.delay_input = wx.TextCtrl(self, value=self.parent.wxconfig.Read('/forwardDelay', defaultVal=""),
+        rate_label = wx.StaticText(self, label="Packets/Sec:")
+        self.rate_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardRate', defaultVal=""),
                                           size=(40, -1))
+        pkt_ls_lbl = wx.StaticText(self, label="Packet Loss % :")
+        self.loss_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardLoss', defaultVal=""),
+                                       size=(40, -1))
         self.frwd_box1 = wx.BoxSizer()
         self.frwd_box1.Add(dst_ip_label, 0, wx.EXPAND | wx.RIGHT, 5)
         self.frwd_box1.Add(self.dst_ip_input, 0, wx.EXPAND | wx.RIGHT, 15)
         self.frwd_box1.Add(dst_port_label, 0, wx.EXPAND | wx.RIGHT, 5)
         self.frwd_box1.Add(self.dst_port_input, 0, wx.EXPAND | wx.RIGHT, 15)
-        self.frwd_box1.Add(delay_label, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.frwd_box1.Add(self.delay_input, 0, wx.EXPAND | wx.RIGHT, 15)
+        self.frwd_box1.Add(rate_label, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.frwd_box1.Add(self.rate_input, 0, wx.EXPAND | wx.RIGHT, 15)
+        self.frwd_box1.Add(pkt_ls_lbl, 0, wx.EXPAND | wx.RIGHT, 5)
+        self.frwd_box1.Add(self.loss_input, 0, wx.EXPAND | wx.RIGHT, 15)
         for item in self.frwd_box1.GetChildren():
             widget = item.GetWindow()
             if widget:
@@ -86,8 +89,12 @@ class Panel(wx.Panel):
 
         source_label = wx.StaticText(self, label="Syslog Traffic Controller Tagging")
         self.source_ck_bx = wx.CheckBox(self)
+        chk_bx_val = self.wxconfig.Read('/trafficController', defaultVal="")
+        if chk_bx_val == "True":
+            self.source_ck_bx.SetValue(True)
+
         index_label = wx.StaticText(self, label="Start Index:")
-        self.index_input = wx.TextCtrl(self, value="1", size=(60, -1))
+        self.index_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardIndex', defaultVal=""), size=(60, -1))
         self.forward = wx.Button(self, label="Play Out")
         self.forward.Bind(wx.EVT_BUTTON, self.on_forward)
         self.pause = wx.Button(self, label="Pause")
@@ -128,10 +135,9 @@ class Panel(wx.Panel):
 
         self.SetSizer(self.main_vbox)
 
-
     def on_file_change(self, event=None):
         """ Event method for preview button.
-        Loads the file for 2 seconds to get a feel of the file."""
+        Loads the file for 3 seconds to get a feel of the file."""
         path = self.file_name.GetValue()
         self.destination_ips = {}
         self.destination_ports = {}
@@ -175,17 +181,18 @@ class Panel(wx.Panel):
     def update_list(self, event=None):
         """Updates the list according to the selected destination Port and IP. Does not feed the list more than 210"""
         self.list_ctrl.DeleteAllItems()
-        if self.destination_ips and self.destination_ports:   # Check if there were any scans
+        if self.destination_ips and self.destination_ports:   # Check if there were any IP and Port scanned
             ip_key = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
             port_key = self.port_cmb_bx.GetStringSelection().split(" ")[0]
             packets = self.destination_ips[ip_key]
             protocol = self.protocol_cmb_bx.GetStringSelection()
+            lines = random.randint(250, 300)
             for packet in packets:
                 if (protocol == 'UDP' and not packet.udp_len) or (protocol == 'TCP' and packet.udp_len):
                     continue
                 if str(packet.dst_port) == port_key:
                     self.add_to_list(packet)
-                if self.list_ctrl.GetItemCount() > 210:
+                if self.list_ctrl.GetItemCount() > lines:
                     break
 
     def on_forward(self, event):
@@ -198,8 +205,9 @@ class Panel(wx.Panel):
 
         dst_ip = self.dst_ip_input.GetValue()
         dst_port = self.dst_port_input.GetValue()
-        delay = self.delay_input.GetValue() # Packets per second
+        rate = self.rate_input.GetValue() # Packets per second
         index = self.index_input.GetValue()
+        loss = self.loss_input.GetValue()
         add_source = self.source_ck_bx.IsChecked()
         if not utils.is_valid_ip(dst_ip):
             self.error_prompt("Destination IP not valid!")
@@ -207,22 +215,27 @@ class Panel(wx.Panel):
         if not utils.is_valid_port(dst_port):
             self.error_prompt("Destination IP not valid!")
             return
-        if not utils.is_positive_number(delay):
+        if not utils.is_positive_number(rate):
             self.error_prompt("Packets per second should be an integer greater than zero!")
             return
         if not utils.is_positive_number(index):
             self.error_prompt("Index should be an integer greater than zero!")
             return
-        self.parent.wxconfig.Write("/forwardIP", dst_ip)
-        self.parent.wxconfig.Write("/forwardPort", dst_port)
-        self.parent.wxconfig.Write("/forwardDelay", delay)
-        self.parent.wxconfig.Write("/forwardIndex", delay)
+        if not utils.is_percentage(loss):
+            self.error_prompt("Loss should be a number <= 100 and >= 0")
+            return
+        self.wxconfig.Write("/forwardIP", dst_ip)
+        self.wxconfig.Write("/forwardPort", dst_port)
+        self.wxconfig.Write("/forwardRate", rate)
+        self.wxconfig.Write("/forwardIndex", index)
+        self.wxconfig.Write("/trafficController", str(add_source))
+        self.wxconfig.Write("/forwardLoss", loss)
         trg_ip = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
         trg_port = int(self.port_cmb_bx.GetStringSelection().split(" ")[0])
         path = self.file_name.GetValue()
         protocol = self.protocol_cmb_bx.GetStringSelection()
-        self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip,
-                                                                  int(dst_port), add_source, int(index), int(delay))
+        self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip, int(dst_port),
+                                                                  add_source, int(index), int(rate), int(loss))
         self.timer.Start(200)
         self.pause.Enable()
         self.stop.Enable()
@@ -259,7 +272,7 @@ class Panel(wx.Panel):
        if dialog.ShowModal() == wx.ID_OK:
            self.file_name.Clear()
            self.file_name.SetValue(dialog.GetPath())
-           self.config.Write("/capture_path", dialog.GetPath())
+           self.wxconfig.Write("/capture_path", dialog.GetPath())
            self.on_file_change()
            
            for item in self.settings_box_sizer.GetChildren():

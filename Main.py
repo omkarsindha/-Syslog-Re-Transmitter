@@ -26,7 +26,8 @@ class MainFrame(wx.Frame):
 
         self.CreateStatusBar(number=2, style=wx.STB_SIZEGRIP | wx.STB_ELLIPSIZE_END)
         self.SetStatusWidths([-1, 100])
-        self.SetStatusText("Welcome :)", 0)
+        self.SetStatusText("Welcome :)",0)
+        self.Bind(wx.EVT_WINDOW_CREATE, self.on_load)
 
     def on_about(self, event):
         info = wx.adv.AboutDialogInfo()
@@ -39,6 +40,9 @@ class MainFrame(wx.Frame):
         info.SetWebSite("www.evertz.com", "Evertz")
         info.AddDeveloper("Omkarsinh Sindha and Cengiz Beytaz")
         wx.adv.AboutBox(info)
+
+    def on_load(self, event:wx.EVT_WINDOW_CREATE):
+        print("HII")
 # End class MainFrame(wx.Frame)
 
 
