@@ -1,11 +1,13 @@
 import random
 import socket
 import time
+import wx.lib.intctrl
 import utils
 import wx
 import pcaplib
 import Widgets
 import Threads
+
 
 class Panel(wx.Panel):
     def __init__(self, parent, wxconfig):
@@ -18,23 +20,11 @@ class Panel(wx.Panel):
 
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.OnTimer, self.timer)
-        self.animation_counter: int = 0
 
-        self.main_vbox = wx.BoxSizer(wx.VERTICAL)
-        main_box = wx.StaticBox(self)
-        main_box.SetFont(wx.Font(wx.FontInfo(12).Bold()))
-        main_box_sizer = wx.StaticBoxSizer(main_box)
-
-        file_box_sizer = wx.BoxSizer()
-        self.file_label = wx.StaticText(self, label="Source File:")
+        self.file_label = wx.StaticText(self, label="Capture File:")
         self.file_name = wx.TextCtrl(self, style=wx.TE_READONLY, size=(400, -1))
         self.choose_file = wx.Button(self, label="Choose File")
         self.choose_file.Bind(wx.EVT_BUTTON, self.on_choose)
-
-        file_box_sizer.Add(self.file_label, 0, wx.EXPAND | wx.ALL, 5)
-        file_box_sizer.Add(self.file_name, 0, wx.EXPAND | wx.ALL, 5)
-        file_box_sizer.Add(self.choose_file, 0, wx.EXPAND | wx.ALL, 5)
-
         self.progress_bar = Widgets.ProgressBarWidget(self)
 
         trg_ip_label = wx.StaticText(self, label="Target IP:")
@@ -49,17 +39,6 @@ class Panel(wx.Panel):
         self.protocol_cmb_bx.SetSelection(0)
         self.protocol_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
 
-        self.settings_box_sizer = wx.BoxSizer()
-        self.settings_box_sizer.Add(trg_ip_label, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.settings_box_sizer.Add(self.ip_cmb_bx, 0, wx.EXPAND | wx.RIGHT, 15)
-        self.settings_box_sizer.Add(trg_port_label, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.settings_box_sizer.Add(self.port_cmb_bx, 0, wx.EXPAND | wx.RIGHT, 15)
-        self.settings_box_sizer.Add(self.protocol_cmb_bx, 0, wx.EXPAND | wx.LEFT, 5)
-        for item in self.settings_box_sizer.GetChildren():
-            widget = item.GetWindow()
-            if widget:
-                widget.Disable()
-
         dst_ip_label = wx.StaticText(self, label="Destination IP:")
         self.dst_ip_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardIP', defaultVal=""),
                                         size=(100, -1))
@@ -67,60 +46,37 @@ class Panel(wx.Panel):
         dst_port_label = wx.StaticText(self, label="Destination Port:")
         self.dst_port_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardPort', defaultVal=""),
                                       size=(50, -1))
-        rate_label = wx.StaticText(self, label="Packets/Sec:")
-        self.rate_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardRate', defaultVal=""),
-                                          size=(40, -1))
-        pkt_ls_lbl = wx.StaticText(self, label="Packet Loss % :")
-        self.loss_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardLoss', defaultVal=""),
-                                       size=(40, -1))
-        self.frwd_box1 = wx.BoxSizer()
-        self.frwd_box1.Add(dst_ip_label, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.frwd_box1.Add(self.dst_ip_input, 0, wx.EXPAND | wx.RIGHT, 15)
-        self.frwd_box1.Add(dst_port_label, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.frwd_box1.Add(self.dst_port_input, 0, wx.EXPAND | wx.RIGHT, 15)
-        self.frwd_box1.Add(rate_label, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.frwd_box1.Add(self.rate_input, 0, wx.EXPAND | wx.RIGHT, 15)
-        self.frwd_box1.Add(pkt_ls_lbl, 0, wx.EXPAND | wx.RIGHT, 5)
-        self.frwd_box1.Add(self.loss_input, 0, wx.EXPAND | wx.RIGHT, 15)
-        for item in self.frwd_box1.GetChildren():
-            widget = item.GetWindow()
-            if widget:
-                widget.Disable()
 
-        source_label = wx.StaticText(self, label="Syslog Traffic Controller Tagging")
-        self.source_ck_bx = wx.CheckBox(self)
+        self.packet_loss = wx.CheckBox(self, label="Packet Loss")
+        self.packet_loss.Bind(wx.EVT_CHECKBOX, self.update_checkbox_state)
+        self.loss_input = wx.SpinCtrl(self, value=self.wxconfig.Read('/forwardLoss', defaultVal=""),
+                                      size=(60, -1))
+        self.percent_lbl = wx.StaticText(self, label="%")
+
+
+        self.rate_chk_bx = wx.CheckBox(self, label="Realtime")
+        self.rate_chk_bx.Bind(wx.EVT_CHECKBOX, self.update_checkbox_state)
+        self.rate_input = wx.lib.intctrl.IntCtrl(self, value= int(self.wxconfig.Read('/forwardRate', defaultVal="0")),
+                                          size=(40, -1))
+        self.rate_label = wx.StaticText(self, label="Packets/sec")
+
+        self.source_ck_bx = wx.CheckBox(self, label="Syslog Traffic Controller Tagging")
+        self.source_ck_bx.SetToolTip("Prefixes the payload with actual packet source (::dst-ip::xxxx)")
         chk_bx_val = self.wxconfig.Read('/trafficController', defaultVal="")
         if chk_bx_val == "True":
             self.source_ck_bx.SetValue(True)
 
         index_label = wx.StaticText(self, label="Start Index:")
-        self.index_input = wx.TextCtrl(self, value=self.wxconfig.Read('/forwardIndex', defaultVal=""), size=(60, -1))
+        self.index_input = wx.lib.intctrl.IntCtrl(self, value=int(self.wxconfig.Read('/forwardIndex', defaultVal="")), size=(60, -1))
         self.forward = wx.Button(self, label="Play Out")
         self.forward.Bind(wx.EVT_BUTTON, self.on_forward)
         self.pause = wx.Button(self, label="Pause")
         self.pause.Bind(wx.EVT_BUTTON, self.on_pause)
         self.stop = wx.Button(self, label="Stop")
         self.stop.Bind(wx.EVT_BUTTON, self.on_stop)
-        self.frwd_box2 = wx.BoxSizer()
-        self.frwd_box2.Add(source_label, 0, wx.EXPAND | wx.TOP | wx.RIGHT, 5)
-        self.frwd_box2.Add(self.source_ck_bx, 0, wx.EXPAND | wx.RIGHT, 10)
-        self.frwd_box2.Add(index_label, 0, wx.EXPAND | wx.TOP | wx.RIGHT, 5)
-        self.frwd_box2.Add(self.index_input, 0, wx.EXPAND | wx.RIGHT, 30)
-        self.frwd_box2.Add(self.forward, 0, wx.EXPAND | wx.RIGHT, 10)
-        self.frwd_box2.Add(self.pause, 0, wx.EXPAND | wx.RIGHT, 10)
-        self.frwd_box2.Add(self.stop, 0, wx.EXPAND | wx.RIGHT, 5)
-        for item in self.frwd_box2.GetChildren():
-            widget = item.GetWindow()
-            if widget:
-                widget.Disable()
-
-        vbox = wx.BoxSizer(wx.VERTICAL)
-        vbox.Add(file_box_sizer, 0, wx.ALIGN_CENTER | wx.TOP, 5)
-        vbox.Add(self.progress_bar, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
-        vbox.Add(self.settings_box_sizer, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
-        vbox.Add(self.frwd_box1, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
-        vbox.Add(self.frwd_box2, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
-        main_box_sizer.Add(vbox, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+        btns = [self.forward, self.stop, self.pause]
+        for btn in btns:
+            btn.Disable()
 
         # List Control
         self.list_ctrl = wx.ListCtrl(self, style=wx.LC_REPORT)
@@ -130,10 +86,59 @@ class Panel(wx.Panel):
         self.list_ctrl.InsertColumn(3, 'Length', width=50)
         self.list_ctrl.InsertColumn(4, 'Info',width=800)
 
-        self.main_vbox.Add(main_box_sizer, flag=wx.RIGHT | wx.ALIGN_CENTER)
-        self.main_vbox.Add(self.list_ctrl, proportion=1, flag=wx.EXPAND | wx.ALL, border=10)
+        self.main_vbox = wx.BoxSizer(wx.VERTICAL)
+        main_box = wx.StaticBox(self)
+        main_box.SetFont(wx.Font(wx.FontInfo(12).Bold()))
 
+        self.file_grid = wx.GridBagSizer()
+        self.file_grid.Add(self.file_label, pos=(0,0), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALL, border=5)
+        self.file_grid.Add(self.file_name, pos=(0,1), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALL, border=5)
+        self.file_grid.Add(self.choose_file, pos=(0,2), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALL, border=5)
+
+        label_flag = wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT | wx.RIGHT
+        input_flag = wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT | wx.RIGHT
+        button_flag = wx.ALIGN_CENTER_VERTICAL | wx.CENTER | wx.RIGHT | wx.LEFT
+        self.settings_grid1 = wx.GridBagSizer()
+        self.settings_grid1.Add(trg_ip_label, pos=(0,0), flag=label_flag, border=5)
+        self.settings_grid1.Add(self.ip_cmb_bx, pos=(0,1), flag=input_flag, border=15)
+        self.settings_grid1.Add(trg_port_label, pos=(0,2), flag=label_flag, border=5)
+        self.settings_grid1.Add(self.port_cmb_bx, pos=(0,3), flag=input_flag, border=20)
+        self.settings_grid1.Add(self.protocol_cmb_bx, pos=(0,4), flag=input_flag, border=5)
+
+        self.settings_grid2= wx.GridBagSizer()
+        self.settings_grid2.Add(dst_ip_label, pos=(0,0), flag=label_flag, border=5)
+        self.settings_grid2.Add(self.dst_ip_input, pos=(0,1), flag=input_flag, border=15)
+        self.settings_grid2.Add(dst_port_label, pos=(0,2), flag=label_flag, border=5)
+        self.settings_grid2.Add(self.dst_port_input, pos=(0,3), flag=input_flag, border=15)
+        self.settings_grid2.Add(self.packet_loss, pos=(0,4), flag=label_flag)
+        self.settings_grid2.Add(self.loss_input, pos=(0,5), flag=input_flag, border=5)
+        self.settings_grid2.Add(self.percent_lbl, pos=(0, 6), flag=input_flag, border=5)
+
+        self.settings_grid3 = wx.GridBagSizer()
+        self.settings_grid3.Add(self.rate_chk_bx, pos=(0, 1), flag=label_flag, border=0)
+        self.settings_grid3.Add(self.rate_input, pos=(0, 2), flag=label_flag, border=3)
+        self.settings_grid3.Add(self.rate_label, pos=(0, 3), flag=input_flag, border=20)
+        self.settings_grid3.Add(self.source_ck_bx, pos=(0,4), flag=input_flag, border=15)
+        self.settings_grid3.Add(index_label, pos=(0,5), flag=label_flag, border=5)
+        self.settings_grid3.Add(self.index_input, pos=(0,6), flag=input_flag, border=15)
+
+        self.settings_grid4 = wx.GridBagSizer()
+        self.settings_grid4.Add(self.forward, pos=(0, 4), flag=button_flag, border=5)
+        self.settings_grid4.Add(self.pause, pos=(0, 5), flag=button_flag, border=5)
+        self.settings_grid4.Add(self.stop, pos=(0, 6), flag=button_flag, border=5)
+
+        vbox = wx.BoxSizer(wx.VERTICAL)
+        vbox.Add(self.file_grid, 0, wx.ALIGN_CENTER | wx.TOP, 5)
+        vbox.Add(self.progress_bar, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
+        vbox.Add(self.settings_grid1, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+        vbox.Add(self.settings_grid2, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+        vbox.Add(self.settings_grid3, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+        vbox.Add(self.settings_grid4, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 10)
+
+        self.main_vbox.Add(vbox, flag= wx.ALIGN_CENTER | wx.ALL, border=5)
+        self.main_vbox.Add(self.list_ctrl, proportion=1, flag=wx.EXPAND | wx.ALL, border=10)
         self.SetSizer(self.main_vbox)
+        self.disable_settings()
 
     def on_file_change(self, event=None):
         """ Event method for preview button.
@@ -167,6 +172,8 @@ class Panel(wx.Panel):
             else:
                 self.destination_ports[port].append(packet)
         self.progress_bar.SetValue(100)
+        self.forward.Enable()
+        self.enable_settings()
         cap.close()
         sorted_destination_ips = dict(sorted(self.destination_ips.items(), key=lambda item: len(item[1]), reverse=True))
         sorted_destination_ports = dict(sorted(self.destination_ports.items(), key=lambda item: len(item[1]), reverse=True))
@@ -196,60 +203,80 @@ class Panel(wx.Panel):
                     break
 
     def on_forward(self, event):
-        if self.re_transmit_thread:
-            self.re_transmit_thread.playing_event.set()
-            self.forward.Disable()
-            self.pause.Enable()
-            self.forward.SetLabel("Play Out")
-            return
-
         dst_ip = self.dst_ip_input.GetValue()
         dst_port = self.dst_port_input.GetValue()
-        rate = self.rate_input.GetValue() # Packets per second
+        rate = -1 if self.rate_chk_bx.IsChecked() else self.rate_input.GetValue() # Packets per second
         index = self.index_input.GetValue()
-        loss = self.loss_input.GetValue()
+        loss = self.loss_input.GetValue() if self.packet_loss.IsChecked() else 0
         add_source = self.source_ck_bx.IsChecked()
+
         if not utils.is_valid_ip(dst_ip):
             self.error_prompt("Destination IP not valid!")
             return
         if not utils.is_valid_port(dst_port):
             self.error_prompt("Destination IP not valid!")
             return
-        if not utils.is_positive_number(rate):
-            self.error_prompt("Packets per second should be an integer greater than zero!")
+        if rate < -1:
+            self.error_prompt("Invalid Packets per second!")
             return
         if not utils.is_positive_number(index):
             self.error_prompt("Index should be an integer greater than zero!")
             return
-        if not utils.is_percentage(loss):
-            self.error_prompt("Loss should be a number <= 100 and >= 0")
-            return
         self.wxconfig.Write("/forwardIP", dst_ip)
         self.wxconfig.Write("/forwardPort", dst_port)
-        self.wxconfig.Write("/forwardRate", rate)
-        self.wxconfig.Write("/forwardIndex", index)
+        if rate != -1:
+            self.wxconfig.Write("/forwardRate", str(rate))
+        self.wxconfig.Write("/forwardIndex", str(index))
         self.wxconfig.Write("/trafficController", str(add_source))
-        self.wxconfig.Write("/forwardLoss", loss)
+        self.wxconfig.Write("/forwardLoss", str(loss))
         trg_ip = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
         trg_port = int(self.port_cmb_bx.GetStringSelection().split(" ")[0])
         path = self.file_name.GetValue()
         protocol = self.protocol_cmb_bx.GetStringSelection()
-        self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip, int(dst_port),
-                                                                  add_source, int(index), int(rate), int(loss))
-        self.timer.Start(200)
+
+        if self.re_transmit_thread:  # this is used as a resume button and change settings
+            self.re_transmit_thread.playing_event.set()
+        else:
+            self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip, int(dst_port),
+                                                                  add_source, int(index), int(rate), loss)
+            self.timer.Start(500)
+        self.disable_settings()
+        for item in self.file_grid.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
         self.pause.Enable()
         self.stop.Enable()
         self.forward.Disable()
+        self.forward.SetLabel("Play Out")
 
     def on_pause(self, event):
-        self.forward.Enable()
         if self.re_transmit_thread:
+            self.forward.Enable()
+            self.forward.SetFocus()
             self.re_transmit_thread.playing_event.clear()
             self.pause.Disable()
             self.forward.SetLabel("Resume")
 
+    def update_checkbox_state(self, event=None):
+        if self.packet_loss.IsChecked():
+            self.loss_input.Enable()
+            self.percent_lbl.Enable()
+        else:
+            self.loss_input.Disable()
+            self.percent_lbl.Disable()
+
+        if self.rate_chk_bx.IsChecked():
+            self.rate_label.Disable()
+            self.rate_input.Disable()
+        else:
+            self.rate_label.Enable()
+            self.rate_input.Enable()
+
     def on_stop(self, event):
         if self.re_transmit_thread is not None:
+
+                    
             self.re_transmit_thread.end_event.set()
             self.forward.SetLabel("Play Out")
             self.pause.Disable()
@@ -274,24 +301,39 @@ class Panel(wx.Panel):
            self.file_name.SetValue(dialog.GetPath())
            self.wxconfig.Write("/capture_path", dialog.GetPath())
            self.on_file_change()
-           
-           for item in self.settings_box_sizer.GetChildren():
-               widget = item.GetWindow()
-               if widget:
-                   widget.Enable()
-           for item in self.frwd_box1.GetChildren():
-               widget = item.GetWindow()
-               if widget:
-                   widget.Enable()
-           for item in self.frwd_box2.GetChildren():
-               widget = item.GetWindow()
-               if widget:
-                   widget.Enable()
            self.pause.Disable()
            self.stop.Disable()
 
        dialog.Destroy()
 
+    def disable_settings(self):
+        for item in self.settings_grid1.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
+        for item in self.settings_grid2.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
+        for item in self.settings_grid3.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Disable()
+
+    def enable_settings(self):
+        for item in self.settings_grid1.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Enable()
+        for item in self.settings_grid2.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Enable()
+        for item in self.settings_grid3.GetChildren():
+            widget = item.GetWindow()
+            if widget:
+                widget.Enable()
+        self.update_checkbox_state()
 
     def set_status_text(self, text):
         self.parent.SetStatusText(text)
@@ -300,9 +342,15 @@ class Panel(wx.Panel):
         """Called periodically while the flooder threads are running."""
         count = self.re_transmit_thread.sent_count
         total = '?' if self.re_transmit_thread.total_packets == 0 else str(self.re_transmit_thread.total_packets)
-        # self.set_status_text(f"Forwarding Packets{'.' * (self.animation_counter % 10)}")
         self.set_status_text(f"Forwarding Packet {count} out of {total}")
         if self.re_transmit_thread.end_event.is_set():
+            self.enable_settings()
+            for item in self.file_grid.GetChildren():
+                widget = item.GetWindow()
+                if widget:
+                    widget.Enable()
+                self.pause.Disable()
+                self.stop.Disable()
             if self.timer.IsRunning():
                 self.timer.Stop()
             count = self.re_transmit_thread.sent_count - self.re_transmit_thread.index

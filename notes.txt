@@ -1,3 +1,5 @@
 pause button        done
 start index         done
 include actual source     done
+
+Handle changing settings when next come in

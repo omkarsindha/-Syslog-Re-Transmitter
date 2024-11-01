@@ -31,11 +31,12 @@ def is_positive_number(num):
         print(f"{num} is not a number: {e}")
         return False
 
-def is_percentage(num):
-    """Returns true is given variable is 0-100"""
+def is_multicast(ip):
     try:
-        num = int(num)
-        return 100 >= num >= 0
-    except ValueError as e:
-        print(f"{num} is not a number: {e}")
+        # Convert IP address to 32-bit integer
+        parts = [int(part) for part in ip.split('.')]
+        if len(parts) != 4 or not all(0 <= p <= 255 for p in parts):
+            return False
+        return 224 <= parts[0] <= 239
+    except Exception as e:
         return False
