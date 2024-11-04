@@ -14,8 +14,10 @@ class Panel(wx.Panel):
         wx.Panel.__init__(self, parent)
         self.wxconfig = wxconfig
         self.parent = parent
+        # Dict with keys as IP found in capture and value as list of packets for that ip
         self.destination_ips:dict[str,list] = {}
-        self.destination_ports:dict[str,list] = {}
+        self.destination_ports:dict[str,list] = {}  # Same as above but for port
+        self.packets = []                           # List of first 300 packets
         self.re_transmit_thread: Threads.ReTransmitPacketsThread = None
 
         self.timer = wx.Timer(self)
@@ -27,15 +29,20 @@ class Panel(wx.Panel):
         self.choose_file.Bind(wx.EVT_BUTTON, self.on_choose)
         self.progress_bar = Widgets.ProgressBarWidget(self)
 
-        trg_ip_label = wx.StaticText(self, label="Target IP:")
+        self.trg_chk_bx = wx.CheckBox(self, label="Target Remapping")
+        chk_bx_val = self.wxconfig.Read('/remap', defaultVal="")
+        if chk_bx_val == "True":
+            self.trg_chk_bx.SetValue(True)
+        self.trg_chk_bx.Bind(wx.EVT_CHECKBOX, self.target_remap_event)
+        self.trg_ip_label = wx.StaticText(self, label="Target IP:")
         self.ip_cmb_bx = wx.ComboBox(self, size=(180, -1), style=wx.CB_READONLY)
         self.ip_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
 
-        trg_port_label = wx.StaticText(self, label="Target Port:")
+        self.trg_port_label = wx.StaticText(self, label="Target Port:")
         self.port_cmb_bx = wx.ComboBox(self, size=(150, -1), style=wx.CB_READONLY)
         self.port_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
 
-        self.protocol_cmb_bx = wx.ComboBox(self, choices=['UDP', 'TCP'], style=wx.CB_READONLY)
+        self.protocol_cmb_bx = wx.ComboBox(self, choices=['UDP'], style=wx.CB_READONLY)
         self.protocol_cmb_bx.SetSelection(0)
         self.protocol_cmb_bx.Bind(wx.EVT_COMBOBOX, self.update_list)
 
@@ -48,13 +55,19 @@ class Panel(wx.Panel):
                                       size=(50, -1))
 
         self.packet_loss = wx.CheckBox(self, label="Packet Loss")
+        chk_bx_val = self.wxconfig.Read('/packetLoss', defaultVal="")
+        if chk_bx_val == "True":
+            self.packet_loss.SetValue(True)
         self.packet_loss.Bind(wx.EVT_CHECKBOX, self.update_checkbox_state)
         self.loss_input = wx.SpinCtrl(self, value=self.wxconfig.Read('/forwardLoss', defaultVal=""),
                                       size=(60, -1))
         self.percent_lbl = wx.StaticText(self, label="%")
 
-
         self.rate_chk_bx = wx.CheckBox(self, label="Realtime")
+        chk_bx_val = self.wxconfig.Read('/rateCheckbox', defaultVal="")
+        if chk_bx_val == "True":
+            self.rate_chk_bx.SetValue(True)
+
         self.rate_chk_bx.Bind(wx.EVT_CHECKBOX, self.update_checkbox_state)
         self.rate_input = wx.lib.intctrl.IntCtrl(self, value= int(self.wxconfig.Read('/forwardRate', defaultVal="0")),
                                           size=(40, -1))
@@ -99,11 +112,12 @@ class Panel(wx.Panel):
         input_flag = wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT | wx.RIGHT
         button_flag = wx.ALIGN_CENTER_VERTICAL | wx.CENTER | wx.RIGHT | wx.LEFT
         self.settings_grid1 = wx.GridBagSizer()
-        self.settings_grid1.Add(trg_ip_label, pos=(0,0), flag=label_flag, border=5)
-        self.settings_grid1.Add(self.ip_cmb_bx, pos=(0,1), flag=input_flag, border=15)
-        self.settings_grid1.Add(trg_port_label, pos=(0,2), flag=label_flag, border=5)
-        self.settings_grid1.Add(self.port_cmb_bx, pos=(0,3), flag=input_flag, border=20)
-        self.settings_grid1.Add(self.protocol_cmb_bx, pos=(0,4), flag=input_flag, border=5)
+        self.settings_grid1.Add(self.trg_chk_bx, pos=(0, 0), flag=input_flag, border=15)
+        self.settings_grid1.Add(self.trg_ip_label, pos=(0,1), flag=label_flag, border=5)
+        self.settings_grid1.Add(self.ip_cmb_bx, pos=(0,2), flag=input_flag, border=15)
+        self.settings_grid1.Add(self.trg_port_label, pos=(0,3), flag=label_flag, border=5)
+        self.settings_grid1.Add(self.port_cmb_bx, pos=(0,4), flag=input_flag, border=20)
+        self.settings_grid1.Add(self.protocol_cmb_bx, pos=(0,5), flag=input_flag, border=5)
 
         self.settings_grid2= wx.GridBagSizer()
         self.settings_grid2.Add(dst_ip_label, pos=(0,0), flag=label_flag, border=5)
@@ -146,20 +160,22 @@ class Panel(wx.Panel):
         path = self.file_name.GetValue()
         self.destination_ips = {}
         self.destination_ports = {}
-        cap = pcaplib.CapFile(filename=path)
-
         start_time = time.time()
         self.progress_bar.Reset()
+        self.packets = []
+        count = 0
+        cap = pcaplib.CapFile(filename=path)
         for packet in cap:
             elapsed = time.time() - start_time
             progress = min(100, int((elapsed / 3) * 100))
             self.progress_bar.SetValue(progress)
-
             if elapsed > 3:
                 break
             if not isinstance(packet, pcaplib.Packet):
                 continue
             if not packet.dst:  # Sometimes the destination is none
+                continue
+            if not packet.udp_len:
                 continue
             ip = socket.inet_ntoa(packet.dst)
             if ip not in self.destination_ips:
@@ -171,6 +187,8 @@ class Panel(wx.Panel):
                 self.destination_ports[port] = [packet]
             else:
                 self.destination_ports[port].append(packet)
+            if count < 300:
+                self.packets.append(packet)
         self.progress_bar.SetValue(100)
         self.forward.Enable()
         self.enable_settings()
@@ -185,22 +203,42 @@ class Panel(wx.Panel):
         self.set_status_text("The list and packet numbers are just for getting a feel of the file, they might not include all the packets!!!")
         self.update_list()
 
+    def target_remap_event(self, even=None):
+        if self.trg_chk_bx.IsChecked():
+            self.ip_cmb_bx.Enable()
+            self.port_cmb_bx.Enable()
+            self.trg_ip_label.Enable()
+            self.trg_port_label.Enable()
+        else:
+            self.trg_ip_label.Disable()
+            self.trg_port_label.Disable()
+            self.ip_cmb_bx.Disable()
+            self.port_cmb_bx.Disable()
+        self.update_list()
+
     def update_list(self, event=None):
         """Updates the list according to the selected destination Port and IP. Does not feed the list more than 210"""
         self.list_ctrl.DeleteAllItems()
-        if self.destination_ips and self.destination_ports:   # Check if there were any IP and Port scanned
+        lines = random.randint(250, 300)
+        if not self.trg_chk_bx.IsChecked():  # IF REMAPPING IS ON
+            for packet in self.packets:
+                if self.list_ctrl.GetItemCount() > lines:
+                    break
+                self.add_to_list(packet)
+            return
+        if self.destination_ips and self.destination_ports:   # If there were ips and ports found
             ip_key = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
             port_key = self.port_cmb_bx.GetStringSelection().split(" ")[0]
             packets = self.destination_ips[ip_key]
             protocol = self.protocol_cmb_bx.GetStringSelection()
-            lines = random.randint(250, 300)
             for packet in packets:
+                if self.list_ctrl.GetItemCount() > lines:
+                    break
                 if (protocol == 'UDP' and not packet.udp_len) or (protocol == 'TCP' and packet.udp_len):
                     continue
                 if str(packet.dst_port) == port_key:
                     self.add_to_list(packet)
-                if self.list_ctrl.GetItemCount() > lines:
-                    break
+
 
     def on_forward(self, event):
         dst_ip = self.dst_ip_input.GetValue()
@@ -209,7 +247,7 @@ class Panel(wx.Panel):
         index = self.index_input.GetValue()
         loss = self.loss_input.GetValue() if self.packet_loss.IsChecked() else 0
         add_source = self.source_ck_bx.IsChecked()
-
+        is_remap = self.trg_chk_bx.GetValue()
         if not utils.is_valid_ip(dst_ip):
             self.error_prompt("Destination IP not valid!")
             return
@@ -227,8 +265,12 @@ class Panel(wx.Panel):
         if rate != -1:
             self.wxconfig.Write("/forwardRate", str(rate))
         self.wxconfig.Write("/forwardIndex", str(index))
-        self.wxconfig.Write("/trafficController", str(add_source))
         self.wxconfig.Write("/forwardLoss", str(loss))
+        # Checkbox values
+        self.wxconfig.Write("/trafficController", str(add_source))
+        self.wxconfig.Write("/rateCheckbox", str(self.rate_chk_bx.GetValue()))
+        self.wxconfig.Write("/remap", str(self.trg_chk_bx.GetValue()))
+        self.wxconfig.Write("/packetLoss", str(self.packet_loss.GetValue()))
         trg_ip = self.ip_cmb_bx.GetStringSelection().split(" ")[0]
         trg_port = int(self.port_cmb_bx.GetStringSelection().split(" ")[0])
         path = self.file_name.GetValue()
@@ -237,7 +279,7 @@ class Panel(wx.Panel):
         if self.re_transmit_thread:  # this is used as a resume button and change settings
             self.re_transmit_thread.playing_event.set()
         else:
-            self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, trg_ip, trg_port, protocol, dst_ip, int(dst_port),
+            self.re_transmit_thread = Threads.ReTransmitPacketsThread(path, is_remap, trg_ip, trg_port, protocol, dst_ip, int(dst_port),
                                                                   add_source, int(index), int(rate), loss)
             self.timer.Start(500)
         self.disable_settings()
@@ -275,8 +317,6 @@ class Panel(wx.Panel):
 
     def on_stop(self, event):
         if self.re_transmit_thread is not None:
-
-                    
             self.re_transmit_thread.end_event.set()
             self.forward.SetLabel("Play Out")
             self.pause.Disable()
@@ -334,6 +374,7 @@ class Panel(wx.Panel):
             if widget:
                 widget.Enable()
         self.update_checkbox_state()
+        self.target_remap_event()
 
     def set_status_text(self, text):
         self.parent.SetStatusText(text)

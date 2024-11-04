@@ -7,10 +7,11 @@ import utils
 
 
 class ReTransmitPacketsThread(threading.Thread):
-    def __init__(self, file, trg_ip, trg_port, protocol, ip, port, add_source, index, rate, loss):
+    def __init__(self, file, is_remap, trg_ip, trg_port, protocol, ip, port, add_source, index, rate, loss):
         """Sends packets to new ip and port"""
         super().__init__()
         self.file: str = file
+        self.is_remap = is_remap
         self.trg_ip: str = trg_ip  # Destination IP on packet
         self.trg_port: str = trg_port  # Destination Port on packet
         self.protocol = protocol
@@ -21,7 +22,7 @@ class ReTransmitPacketsThread(threading.Thread):
         self.loss = loss
         self.sent_count = self.index - 1  # Packet sent count
         self.total_packets = 0  # We do not know total packets
-        self.packet_count_thread = PacketCountThread(file, trg_ip, trg_port, protocol)
+        self.packet_count_thread = PacketCountThread(file, is_remap, trg_ip, trg_port, protocol)
         self.end_event = threading.Event()
         self.playing_event = threading.Event()
         self.playing_event.set()
@@ -49,6 +50,7 @@ class ReTransmitPacketsThread(threading.Thread):
                     continue
                 if self.end_event.is_set():
                     break
+
                 if self.protocol == 'UDP':
                     if not packet.udp_len:
                         continue
@@ -56,11 +58,11 @@ class ReTransmitPacketsThread(threading.Thread):
                     if packet.udp_len:
                         continue
 
-                pkt_trg_ip = socket.inet_ntoa(packet.dst)
-                pkt_trg_port = packet.dst_port
-
-                if (self.trg_ip != pkt_trg_ip) or (self.trg_port != pkt_trg_port):
-                    continue
+                if self.is_remap:
+                    pkt_trg_ip = socket.inet_ntoa(packet.dst)
+                    pkt_trg_port = packet.dst_port
+                    if (self.trg_ip != pkt_trg_ip) or (self.trg_port != pkt_trg_port):
+                        continue
 
                 if index_counter < self.index:
                     index_counter += 1
@@ -76,7 +78,7 @@ class ReTransmitPacketsThread(threading.Thread):
                     if prev_delayed_packet_time == 0:         # Only for the first packet
                         prev_delayed_packet_time = packet.timestamp
                     elapsed = time.perf_counter() - start_time
-                    delay = packet.timestamp - prev_delayed_packet_time + elapsed
+                    delay = packet.timestamp - prev_delayed_packet_time - elapsed
                     if delay  >= 0.2:
                         time.sleep(delay)
                         prev_delayed_packet_time = packet.timestamp
@@ -86,7 +88,6 @@ class ReTransmitPacketsThread(threading.Thread):
                     if since_last_delay > (self.rate / self.bursts_per_second):
                         elapsed = time.perf_counter() - start_time
                         sleep_time = (1 / self.bursts_per_second) - elapsed
-                        # print(f"Sleep time is {sleep_time}")
                         if sleep_time >= 0:
                             time.sleep(sleep_time)
                         since_last_delay = 0
@@ -106,15 +107,14 @@ class ReTransmitPacketsThread(threading.Thread):
                         self.packet_count_thread = None
             cap.close()
         self.end_event.set()
-
-
 # end class ReTransmitPacketsThread(threading.Thread)
 
 
 class PacketCountThread(threading.Thread):
-    def __init__(self, file, trg_ip, trg_port, protocol):
+    def __init__(self, file, is_remap, trg_ip, trg_port, protocol):
         super().__init__()
         self.file: str = file
+        self.is_remap = is_remap
         self.trg_ip: str = trg_ip  # Destination IP on packet
         self.trg_port: str = trg_port  # Destination Port on packet
         self.protocol = protocol
@@ -137,11 +137,11 @@ class PacketCountThread(threading.Thread):
                 if packet.udp_len:
                     continue
 
-            pkt_trg_ip = socket.inet_ntoa(packet.dst)
-            pkt_trg_port = packet.dst_port
-
-            if (self.trg_ip != pkt_trg_ip) or (self.trg_port != pkt_trg_port):
-                continue
+            if self.is_remap:
+                pkt_trg_ip = socket.inet_ntoa(packet.dst)
+                pkt_trg_port = packet.dst_port
+                if (self.trg_ip != pkt_trg_ip) or (self.trg_port != pkt_trg_port):
+                    continue
 
             self.total_packets += 1
         cap.close()
